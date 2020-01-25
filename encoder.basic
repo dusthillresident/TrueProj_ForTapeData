@@ -1,0 +1,263 @@
+s%=44100
+p=PI*2
+phase%=FALSE
+DIM fr%(1)
+fr%(0)=5000
+fr%(1)=2450
+MoreOnesThanOs%=FALSE
+PROCloadconf
+
+IF 0 THEN
+PRINT ((s% DIV fr%(0))DIV2)-1
+PRINT ((s% DIV fr%(1))DIV2)-1
+PRINT GET
+END
+ENDIF
+
+fout%=OPENOUT("eout.raw")
+fin%=OPENIN("input")
+
+FOR i%=0 TO s%*1.5
+ BPUT#fout%,128
+NEXT
+
+PROCwritestartsignal
+FILE_SIZE%=EXT#fin%
+FOR i%=1 TO 3
+ PROCencodeandwritebyte(FILE_SIZE% AND 255)
+ PROCencodeandwritebyte((FILE_SIZE% AND 255) EOR 255)
+ FILE_SIZE%=FILE_SIZE%>>8
+NEXT
+PROCwritestring( FNlegalstring( FNloadstringfromfile("FILENAME") ) )
+
+MoreOnesThanOs%=FNmostcommonbit(fin%)
+PROCencodeandwritebyte(MoreOnesThanOs%)
+
+REPEAT
+ byte%=BGET#fin%
+ PROC_cs_process(byte%)
+ PROCencodeandwritebyte(byte% EOR MoreOnesThanOs%)
+UNTIL EOF#fin%
+
+PROCwritechecksum
+
+FOR i%=0 TO 100
+ PROCwritebit(1)
+NEXT
+
+FOR i%=0 TO 1024*32
+ BPUT#fout%,128
+NEXT
+
+CLOSE#fout%: CLOSE#fin%
+END
+
+REM --------------------------------------------------------------------------------
+REM ================================================================================
+REM ==== Subroutines								====
+REM ================================================================================
+REM --------------------------------------------------------------------------------
+
+
+REM ================================================================================
+REM ==== Write data to signal							====
+REM ================================================================================
+
+
+DEFPROCwritebit(type%)
+ LOCAL i%,freq%
+
+ freq%=fr%(type%)
+
+ IF phase% THEN
+  FOR i%=0 TO ((s% DIV freq%)DIV2)-1
+   BPUT#fout%,128+SIN(i%/s%*(freq%*p))*120
+  NEXT
+ ELSE
+  FOR i%=0 TO ((s% DIV freq%)DIV2)-1
+   BPUT#fout%,128+SIN( (i%/s%*(freq%*p))+(PI) )*120
+  NEXT
+ ENDIF
+
+ phase%=NOT phase%
+
+ENDPROC
+
+
+DEFPROCencodeandwritebyte(input%)
+ LOCAL i%
+ 
+ FOR i%=1 TO 8
+  PROCwritebit(input% AND 1)
+  PROCwritebit(input% AND 1)
+  input%=input%>>1
+ NEXT 
+
+ENDPROC
+
+
+DEFPROCwritestartsignal
+ LOCAL i%
+
+ FOR i%=1 TO (s%*1.5) DIV ((s% DIV fr%(1))DIV2)
+  PROCwritebit(1)
+ NEXT
+ FOR i%=0 TO 32
+  PROCwritebit(1)
+ NEXT
+ PROCwritebit(0)
+
+ FOR i%=1 TO 8
+  PROCwritebit(0)
+ NEXT
+ FOR i%=1 TO 8
+  PROCwritebit(1)
+ NEXT
+
+ PROCencodeandwritebyte(54)
+ PROCencodeandwritebyte(54 EOR 255)
+ENDPROC
+
+
+REM ================================================================================
+REM ==== Data checksum								====
+REM ================================================================================
+
+DEFPROCrotate_l(RETURN in%)
+ in% = (in% << 1) OR (in% >>> 31)
+ENDPROC
+DEFPROC_cs_process(in%)
+ PROCrotate_l(chk_a%)  
+ chk_a%=chk_a% EOR in%
+ chk_a%=chk_a%<<(chk_a%AND3)
+ chk_b%=chk_b% EOR chk_a%
+ PROCrotate_l(chk_a%)
+ chk_a% = chk_a% EOR (0-(chk_b%AND1))
+ chk_b% = chk_b% EOR (0-(chk_a%AND1))
+ SWAP chk_a%,chk_b%
+ENDPROC
+DEFPROCwritechecksum
+ LOCAL i%,a%,b%
+ a%=chk_a%
+ b%=chk_b%
+ FOR i%=0 TO 3
+  PROCencodeandwritebyte(a% AND 255)
+  PROCencodeandwritebyte(b% AND 255)
+  a%=a%>>8
+  b%=b%>>8
+ NEXT
+ PRINT ~chk_a% ~chk_b%
+ENDPROC
+
+REM ================================================================================
+REM ==== Filename 								====
+REM ================================================================================
+
+DEFFNloadstringfromfile(filename$)
+ LOCAL s$,fin%
+ fin%=OPENIN(filename$)
+ IF fin%=0 THEN ="filename.bin"
+ REPEAT
+  s$ = s$ + CHR$(BGET#fin%)
+ UNTIL EOF#fin% OR LENs$=255
+ CLOSE#fin%
+=s$
+
+REM =================================
+REM == simple checksum for strings ==
+REM =================================
+
+DEFPROCrotate_b_l(RETURN in%,c%)
+ IF c%=0 THEN ENDPROC
+ c% = c% AND 7
+ in% = (in% << c%) OR (in% >>>(8-c%))
+ in% = in% AND 255
+ENDPROC
+DEFPROCsimplechecksumprocess(RETURN chk%,b%)
+ PROCrotate_b_l(chk%,1)
+ chk% = chk% EOR b%
+ REM PROCrotate_b_l(chk%,2)
+ PROCrotate_b_l(chk%,chk%AND3)
+ chk% = ( chk% EOR (0-(chk%AND1)) ) AND 255
+ENDPROC
+DEFFNsimplechecksum_fromstring(s$)
+ LOCAL chk%,i%
+ chk%=ASC(s$)
+ WHILE(i%<LENs$)
+  i%+=1
+  PROCsimplechecksumprocess(chk%,ASC(MID$(s$,i%,1)))
+ ENDWHILE
+=chk%
+
+REM ==============================================
+REM == make sure strings have no bad characters ==
+REM ==============================================
+
+DEFFNlegalstring(s$)
+ LOCAL i%,o$,c%
+ WHILE(i%<LENs$)
+  i%+=1
+  c%=ASC(MID$(s$,i%,1))
+  IF c%<32 OR c%>126 THEN o$=o$+"_" ELSE o$=o$+CHR$(c%)
+ ENDWHILE
+=o$
+
+REM ============================
+REM == write string to signal ==
+REM ============================
+
+DEFPROCwritestring(s$)
+ LOCAL i%
+ PROCencodeandwritebyte(LENs$)
+ WHILE(i%<LENs$)
+  i%+=1
+  PROCencodeandwritebyte( ASC(MID$(s$,i%,1)) )
+ ENDWHILE
+ i%=FNsimplechecksum_fromstring(s$)
+ PROCencodeandwritebyte( i% )
+ PROCencodeandwritebyte( i% EOR 255 )
+ENDPROC
+
+REM =============================================
+REM == Get most common bit value for the file. ==
+REM == 0 takes less time than 1, so we can     ==
+REM == potentially save time if we notice that ==
+REM == a file has more 1s than 0s              ==
+REM =============================================
+
+DEF FNmostcommonbit(fp%)
+ LOCAL i%,op%,b%,c%
+ op%=PTR#fp%
+ PTR#fp%=0
+ WHILE NOT EOF#fp%
+  b%=BGET#fp% 
+  FOR i%=0 TO 7
+   c%+=b%AND1
+   b%=b%>>1
+  NEXT
+ ENDWHILE
+ PTR#fp%=op%
+=c% >= (EXT#fp%*8 - c%)
+
+REM ===================
+REM == CONFIGURATION ==
+REM ===================
+
+DEFPROCloadconf
+ ON ERROR LOCAL: fr%(0)=5000:fr%(1)=2450:REPORT:PRINT ''"Warning: bad config file, default settings loaded"'"Press a key to continue":A%=GET: ON ERROR OFF: ENDPROC
+ LIBRARY "CONFIGURATION"
+ FAST=0:RELIABLE=1:CUSTOM=2
+ PROCconfiguration
+ CASE DataSpeedSetting OF
+ WHEN FAST 
+  ENDPROC
+ WHEN RELIABLE
+  fr%(0)=2400
+  fr%(1)=1160
+ WHEN CUSTOM
+  IF CustomFreqZero<CustomFreqOne THEN SWAP CustomFreqZero,CustomFreqOne
+  fr%(0)=CustomFreqZero
+  fr%(1)=CustomFreqOne
+ ENDCASE
+ ON ERROR OFF
+ENDPROC

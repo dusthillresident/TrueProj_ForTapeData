@@ -1,0 +1,282 @@
+ON ERROR PRINT PTR#signal%: REPORT: PRINT ERL: END
+PRINT "Start"
+
+signal%=OPENIN("in.raw")
+fout%=0
+
+REM ==== variables ====
+REM whether we're in the positive or the negative at the moment
+st%=TRUE
+REM bit length threshold
+threshold%=5
+REM size
+FILE_SIZE%=0
+av=128
+REM average amplitude stuff for zero crossing detection ===== ADJUST THIS IF THERE IS RELIABILITY TROUBLE
+vA=0.81752375
+vB=1-vA
+REM =========================================
+REM average frequency stuff for protection against waw
+fvA=0.9
+fvB=1-fvA
+aa=0
+bb=0
+REM ============================================
+startok%=FALSE
+MoreOnesThanOs%=FALSE
+REM ===================
+
+ON ERROR REPORT:PRINT " at line ";ERL''"Press a key to exit or close this window":PRINT GET:END
+
+
+PROCinitialise 
+PROCreadstartsignal
+
+FILE_SIZE%=FNreadfilesize
+
+PROCreadfilename
+
+MoreOnesThanOs% = (FNreadbyte<>0)AND255
+
+PRINT "Read data"
+startok%=TRUE
+FOR i%=1 TO FILE_SIZE%
+ byte%=FNreadbyte EOR MoreOnesThanOs%
+ PROC_cs_process(byte%)
+ BPUT#fout%,byte%
+NEXT
+
+PROCreadchecksum
+
+CLOSE#fout%:CLOSE#signal%
+PRINT "End"
+WAIT(50)
+
+END
+
+
+DEFFNreadpart
+ LOCAL sample%,c%,zerocross%
+
+ REPEAT
+
+  c%+=1: sample%=BGET#signal%
+
+  av=av*vA
+  av += sample%*vB
+
+  IF (sample%>av EOR st%) THEN zerocross%+=1 ELSE zerocross%=0
+
+ UNTIL zerocross%>=2 
+
+ st%=NOT st%
+ 
+=c%
+
+
+DEFFNgetbit(in%)
+ IF in%>=threshold% THEN
+  bb=bb*fvA
+  bb+=in%*fvB
+  aa=aa*fvA
+  aa += (bb/2)*fvB
+ ELSE
+  aa=aa*fvA
+  aa+=in%*fvB
+  bb=bb*fvA
+  bb += (aa*2)*fvB
+ ENDIF
+ IF startok% THEN
+  threshold%=aa+((bb-aa)/2)+1
+ ENDIF
+=in%>=threshold%AND1
+
+
+DEFPROCreadstartsignal
+ PRINT "Read startsignal"
+ LOCAL a,b,i%
+ 
+ a=FNreadpart
+ a=FNreadpart
+ FOR i%=1 TO 32
+  a = (a*0.5) + (FNreadpart*0.5)
+ NEXT
+ b=a/2
+ threshold%=a+((b-a)/2)
+ REPEAT UNTIL FNgetbit(FNreadpart)=0
+  
+ a=FNreadpart
+ FOR i%=1 TO 7
+  a+=FNreadpart: a=a / 2
+ NEXT
+ 
+ b=FNreadpart
+ FOR i%=1 TO 7
+  b+=FNreadpart: b=b / 2
+ NEXT
+
+ threshold%=a+((b-a)/2)
+ threshold%+=1
+
+ IF FNreadbyte<>54 OR FNreadbyte<>(54 EOR 255) THEN CLOSE#signal%: ERROR 17,"failure when reading start signal":END
+
+ENDPROC
+
+
+DEFFNreadbyte
+ LOCAL result%,a%,i%
+ a%=1
+
+ FOR i%=1 TO 8
+  result%+=a%*FNgetbit((FNreadpart+FNreadpart)DIV2)
+  a%=a%*2
+ NEXT
+
+=result%
+
+
+DEFPROCinitialise
+ PRINT "Waiting"
+ LOCAL i%,ap,am,op,om,sample%,c%
+ FOR i%=1 TO 24
+  sample%=BGET#signal%
+ NEXT
+
+ am=128:ap=128
+
+ FOR i%=1 TO 500
+
+  sample%=BGET#signal%
+
+  av=av*0.7
+  av += sample%*0.3
+  
+  IF sample%<av THEN
+   am = am*0.7
+   am += sample%*0.3
+  ELSE
+   ap = ap*0.7
+   ap += sample%*0.3
+  ENDIF
+
+ NEXT
+
+ op=ap:om=am
+
+ REPEAT
+  sample%=BGET#signal%
+
+  av=av*0.7
+  av += sample%*0.3
+  
+  IF sample%<av THEN
+   am = am*0.7
+   am += sample%*0.3
+  ELSE
+   ap = ap*0.7
+   ap += sample%*0.3
+  ENDIF
+  
+  IF (am<om) AND (ap>op) THEN c%+=1 ELSE IF c%>0 THEN c%-=1
+
+ UNTIL c%>125
+ 
+ENDPROC
+
+DEFPROCrotate_l(RETURN in%)
+ in% = (in% << 1) OR (in% >>> 31)
+ENDPROC
+DEFPROC_cs_process(in%)
+ PROCrotate_l(chk_a%)  
+ chk_a%=chk_a% EOR in%
+ chk_a%=chk_a%<<(chk_a%AND3)
+ chk_b%=chk_b% EOR chk_a%
+ PROCrotate_l(chk_a%)
+ chk_a% = chk_a% EOR (0-(chk_b%AND1))
+ chk_b% = chk_b% EOR (0-(chk_a%AND1))
+ SWAP chk_a%,chk_b%
+ENDPROC
+DEFPROCreadchecksum
+ PRINT "Read checksum"
+ LOCAL i%,a%,b%
+ FOR i%=0 TO 3
+  a%=a% OR FNreadbyte<<(8*i%)
+  b%=b% OR FNreadbyte<<(8*i%)
+ NEXT
+ IF (a%=chk_a% AND b%=chk_b%) THEN
+  COLOUR 2
+  PRINT "Good"
+ ELSE
+  COLOUR 5
+  PRINT "BAD"
+ ENDIF
+ PRINT ~chk_a% ~chk_b%
+ COLOUR 15
+ PRINT ~a% ~b%
+ COLOUR 7
+ IF NOT(a%=chk_a% AND b%=chk_b%) THEN ERROR 17,"Checksum failed"
+ENDPROC
+
+DEFPROCrotate_b_l(RETURN in%,c%)
+ IF c%=0 THEN ENDPROC
+ c% = c% AND 7
+ in% = (in% << c%) OR (in% >>>(8-c%))
+ in% = in% AND 255
+ENDPROC
+DEFPROCsimplechecksumprocess(RETURN chk%,b%)
+ PROCrotate_b_l(chk%,1)
+ chk% = chk% EOR b%
+ REM PROCrotate_b_l(chk%,2)
+ PROCrotate_b_l(chk%,chk%AND3)
+ chk% = ( chk% EOR (0-(chk%AND1)) ) AND 255
+ENDPROC
+DEFFNsimplechecksum_fromstring(s$)
+ LOCAL chk%,i%
+ chk%=ASC(s$)
+ WHILE(i%<LENs$)
+  i%+=1
+  PROCsimplechecksumprocess(chk%,ASC(MID$(s$,i%,1)))
+ ENDWHILE
+=chk%
+
+DEFFNlegalstring(s$)
+ LOCAL i%,o$,c%
+ WHILE(i%<LENs$)
+  i%+=1
+  c%=ASC(MID$(s$,i%,1))
+  IF c%<32 OR c%>126 THEN o$=o$+"_" ELSE o$=o$+CHR$(c%)
+ ENDWHILE
+=o$
+
+DEFFNreadstring
+ LOCAL i%,l%,s$
+ l%=FNreadbyte
+ WHILE(i%<l%)
+  i%+=1
+  s$=s$+CHR$(FNreadbyte)
+ ENDWHILE
+ i%=FNreadbyte
+ IF (FNsimplechecksum_fromstring(s$) <> i%) OR (i% <> (FNreadbyte EOR 255)) THEN ERROR 17,"String checksum failed"
+=FNlegalstring(s$)
+
+DEFPROCreadfilename
+ PRINT "Read filename: ";
+ LOCAL n$
+ n$=FNreadstring
+ IF LENn$=0 THEN n$="d_out"
+ fout%=OPENOUT(n$)
+ PRINT n$
+ENDPROC
+
+DEFFNreadfilesize
+ PRINT "Read file length: ";
+ LOCAL i%,fs%,b%,nb%
+ FOR i%=0 TO 2
+  b% =FNreadbyte
+  nb%=FNreadbyte EOR 255
+  IF b%<>nb% THEN ERROR 17,"Failure when reading file length"
+  fs%=fs% OR b%<<(8*i%)
+ NEXT
+ PRINT ;fs%
+=fs%
+

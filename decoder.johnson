@@ -1,0 +1,359 @@
+REM startgraphics 640 512; drawtext 0 0 0 "Start blah rgghgegrheuighiegu";
+print "Start";
+
+variable signal fout;
+set signal openin "in.raw";
+set fout 0;
+
+REM ---- variables ----
+variable st threshold file_size av vA vB fvA fvB aa bb startok moreOnesThanOs chk_a chk_b;
+
+set st 1;
+set threshold 5
+set file_size 0
+set av 128
+set vA 0.81752375
+set vB - 1 vA
+
+set fvA 0.9
+set fvB - 1 fvA
+set aa 0
+set bb 0
+
+set startok 0
+set moreOnesThanOs 0
+
+/*
+set D0 1;
+while 1
+ procrotate_b_l @D0 1;
+ print D0;
+ wait 10;
+endwhile
+*/
+
+procinitialise
+procreadstartsignal
+
+set file_size fnreadfilesize
+
+procreadfilename
+
+set moreOnesThanOs * 255 ! = fnreadbyte 0
+
+print "Read data";
+set startok 1
+variable i byte;
+while < i file_size
+ set byte  ^ fnreadbyte moreOnesThanOs;
+ proc_cs_process byte
+ bput fout byte
+ set i + i 1
+endwhile
+
+procreadchecksum
+
+close fout;
+close signal;
+
+print "End";
+wait 500;
+
+return 0;
+
+
+function fnreadpart local sample c zerocross;
+ set sample 0
+ set c 0
+ set zerocross 0
+ while < zerocross 2
+  set c + c 1
+  set sample bget signal
+  set av * av vA
+  set av + av *sample vB
+  if ( ^ st > sample av )
+   set zerocross + zerocross 1
+  else
+   set zerocross 0
+  endif
+ endwhile
+ set st  ! st
+return c;
+
+function fngetbit in;
+ if >= in threshold
+  set bb  * bb fvA
+  set bb  + bb * in fvB
+  set aa  * aa fvA
+  set aa  + aa * fvB / bb 2
+ else
+  set aa  * aa fvA
+  set aa  + aa * in fvB
+  set bb  * bb fvA
+  set bb  + bb * aa 2 fvB
+ endif
+ if startok
+  set threshold  int + aa (/ (- bb aa) 2) 1
+ endif
+return  >= in threshold;
+
+function procreadstartsignal local a b i;
+ print "Read startsignal";
+ set b 0 
+ 
+ fnreadpart
+ set a fnreadpart
+ set i 0 
+ while < i 32
+  set a  + (* fnreadpart 0.5) * a 0.5
+  set i  + i 1
+ endwhile
+ set b / a 2
+ set threshold  int + a / (- b a) 2
+ while fngetbit fnreadpart
+ endwhile
+ set a fnreadpart
+ set i 0
+ while < i 7
+  set a  + a fnreadpart
+  set a  / a 2
+  set i  + i 1
+ endwhile
+
+ set b fnreadpart
+ set i 0
+ while < i 7
+  set b  + b fnreadpart
+  set b  / b 2
+  set i  + i 1
+ endwhile
+
+ set threshold  int + a ( / (- b a) 2 ) 1
+ 
+ /*
+ print fnreadbyte;
+ print fnreadbyte;
+ tan */
+ if || (! = fnreadbyte 54) ( ! = fnreadbyte (^ 54 255) )
+  print "failure when reading start signal";
+  tan
+ endif
+
+endfunction
+
+function fnreadbyte local result a i;
+ set a 1
+ set result 0
+ set i 0
+ while < i 8
+  set result >> result 1
+  set result  | result << fngetbit( int / (+ fnreadpart fnreadpart) 2 ) 7
+  set i + i 1
+ endwhile
+return result;
+
+function procinitialise local i ap am op om sample c;
+ set i 0 
+ set ap 0
+ set am 0
+ set op 0
+ set om 0
+ set sample 0
+ set c 0
+
+ print "Waiting";
+ set i 0
+ while < i 24
+  set sample bget signal
+  set i + i 1
+ endwhile
+
+ set am 128
+ set ap 128
+ 
+ set i 0
+ while < i 500
+
+  set sample bget signal
+
+  set av  * av 0.7
+  set av  + av * sample 0.3
+
+  if < sample av
+   set am  * am 0.7
+   set am  + am * sample 0.3
+  else
+   set ap  * ap 0.7
+   set ap  + ap * sample 0.3
+  endif
+
+  set i + i 1
+ endwhile
+
+ set op ap
+ set om am
+
+ goto ".fuck"
+ while <= c 125
+  .fuck
+  
+  set sample bget signal
+  
+  set av * av 0.7
+  set av + av * sample 0.3
+  if < sample av 
+   set am  * am 0.7
+   set am  + am * sample 0.3
+  else
+   set ap  * ap 0.7
+   set ap  + ap * sample 0.3
+  endif
+
+  if &&  < am om  > ap op
+   set c + c 1
+  else
+   if > c 0 
+    set c - c 1
+   endif
+  endif
+
+ endwhile
+
+endfunction
+
+function procrotate_l in;
+ set Din |  << Din 1  >>> Din 31
+endfunction
+function proc_cs_process in;
+ procrotate_l @chk_a
+ set chk_a ^ chk_a in
+ set chk_a << chk_a (& chk_a 3 )
+ set chk_b ^ chk_b chk_a;
+ procrotate_l @chk_a
+ set chk_a  ^ chk_a  neg & chk_b 1
+ set chk_b  ^ chk_b  neg & chk_a 1;
+ swap @chk_a @chk_b
+endfunction
+function procreadchecksum local i a b;
+ print "Read checksum";
+ set a 0
+ set b 0
+ set i 0
+ while < i 4
+  set a | a << fnreadbyte (* 8 i)
+  set b | b << fnreadbyte (* 8 i)
+  set i + i 1
+ endwhile
+ if && (= a chk_a) (= b chk_b)
+  print "Good";
+ else
+  print "Bad!!!";
+ endif
+ print "Got:";
+ print chk_a "		" chk_b;
+ print "Should be:";
+ print a "		" b;
+ if ! && (= a chk_a) (= b chk_b)
+  print "Checksum failed"; 
+  tan
+ endif
+endfunction
+
+function procrotate_b_l in c; REM 'in' is a reference
+ if = c 0  endfunction  endif
+ set c  & c 7
+ set Din  | << Din c  >>> Din (- 8 c )
+ set Din & Din 255
+endfunction
+function procsimplechecksumprocess chk b; REM 'chk' is a reference in this function
+ procrotate_b_l chk 1
+ set Dchk    ^ Dchk b;
+ REM fuck
+ procrotate_b_l  chk  & Dchk 3
+ set Dchk & 255 ( ^ Dchk (- 0 (& Dchk 1) ) )
+endfunction
+function fnsimplechecksum_fromstring s local chk i;
+ set chk asc$ $s;
+ set i 0
+ while < i len$ $s
+  procsimplechecksumprocess @chk asc$ mid$ $s i 1
+  set i + i 1
+ endwhile
+return chk
+
+function proclegalstring s local i l c;
+ REM return s;
+ set l len$ $s
+ set i 0
+ REM print "before		" $s;
+ while < i l
+  set c asc$ mid$ $s i 1
+  if || < c 32  > c 126
+   set c asc$ "X"
+  endif
+  set $s cat$ $s chr$c
+  set i + i 1
+ endwhile
+ set $s right$ $s l
+ REM print "after		" $s;
+return s
+
+function fnreadstring local l i;
+ stringvar _FUCK;
+ set l fnreadbyte
+ set i 0;
+ while < i l
+  set _FUCK cat$ _FUCK chr$ fnreadbyte
+  set i + i 1
+ endwhile
+ set i fnreadbyte
+ /*
+ print "FUCK";
+ print i;
+ print  ^ fnreadbyte 255;
+ print fnsimplechecksum_fromstring(@_FUCK);
+ print "@"_FUCK"@";
+ tan 
+ */
+ if | ( ! = fnsimplechecksum_fromstring(@_FUCK) i) (! = i ^ fnreadbyte 255)
+  print "string checksum failed";
+  tan
+ endif
+ proclegalstring @_FUCK;
+return @_FUCK
+
+function procreadfilename local n;
+ set n fnreadstring;
+ if = len$$n 0
+  set $n "d_out"
+ endif
+ set fout openout $n
+ print $n;
+endfunction
+
+function fnreadfilesize local i fs b nb;
+ set fs 0
+ set b 0
+ set nb 0
+ set i 0
+ while < i 3
+  set b fnreadbyte
+  set nb ^ fnreadbyte 255
+  if != b nb
+   print "failure when reading file length";
+   tan
+  endif
+  set fs  | fs << b (* 8 i)
+  set i + i 1
+ endwhile
+ print fs;
+return fs
+
+
+
+function swap a b local c;
+ set  c Da
+ set Da Db
+ set Db  c
+endfunction
+ 

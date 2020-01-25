@@ -1,0 +1,16 @@
+DEFPROCconfiguration: REM do not edit this line
+
+REM : The data transfer speed.
+REM : Valid settings are:
+REM : FAST, RELIABLE, CUSTOM
+
+DataSpeedSetting = FAST
+
+
+
+REM : Frequencies for the CUSTOM speed setting
+
+CustomFreqZero = 5000
+CustomFreqOne  = 2450
+
+ENDPROC: REM do not edit this line either
